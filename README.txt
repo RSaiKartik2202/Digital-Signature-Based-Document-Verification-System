@@ -2,6 +2,7 @@ NOTE:
 consider this is a root directory
 the commands after >> should be executed
 for each folder crate a new terminal window or new terminal tab
+For more info see our project report in current directory
 
 
 
