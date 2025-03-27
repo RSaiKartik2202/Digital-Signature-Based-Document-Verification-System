@@ -1,0 +1,5 @@
+-lssl -lcrypto -->For openssl
+
+-std=c++17 $(pkg-config --cflags --libs libmongocxx) -->mongodb
+
+$(pkg-config --cflags --libs libmongocxx) -->mongodb 2
