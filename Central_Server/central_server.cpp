@@ -255,14 +255,14 @@ class docReceiver
 	// }
 
 	//process file
-	static void process_file(string file_name,string hexSignature)
+	static void process_file(string file_name,string hexSignature,int clientSocketFileDescriptor=-1)
 	{
 		//string file_name=*(string*)args;
-		EC_KEY* public_key = load_public_key("nitw_public_key.pem");
-		string script_name = "python3 meta_data_verifier_single_file.py "+file_name;
+
+		string script_name="python3 meta_data_verifier_single_file.py "+file_name;
 
 		// Run the Python script and capture its output
-		string script_output = run_python_script(script_name);
+		string script_output=run_python_script(script_name);
 
 		if(script_output.empty())
 		{
@@ -271,78 +271,91 @@ class docReceiver
 		}
 
 		// Declare variables to store the extracted metadata
-		string title, signature, unique_id, organization;
+		string unique_id,organization;
 
 		// Extract metadata from the script's output
-		extract_metadata(script_output, unique_id, organization);
+		extract_metadata(script_output,unique_id,organization);
 
 
 		// Print the extracted metadata
-		cout << "Extracted Metadata:" << endl;
-		cout << "Unique ID: " << unique_id << endl;
-		cout << "Organization: " << organization << endl;
+		cout<<"Extracted Metadata:"<<endl;
+		cout<<"Unique ID: "<<unique_id<<endl;
+		cout<<"Organization: "<<organization<<endl;
 
-		vector<unsigned char> final_signature=hex_to_bytes(hexSignature);
-
-		//add metadata to mongodb
-
-		insertDocument(hexSignature,unique_id,organization);
+		string organizationName=organization;
+		replace(organizationName.begin(), organizationName.end(), ' ', '_');
 
 
-		if (!public_key)
+		string oldPublicKeyFileName=to_string(clientSocketFileDescriptor);
+		oldPublicKeyFileName+=".pem";
+
+		string newPublicKeyFileName=organizationName+".pem";
+		if(clientSocketFileDescriptor!=-1)
 		{
-		    cerr << "Error extracting public key" << endl;
+			rename(oldPublicKeyFileName.c_str(),newPublicKeyFileName.c_str());
+			organizationName+=".pem";
+		}
+		EC_KEY* public_key=load_public_key(newPublicKeyFileName.c_str());
+		if(!public_key)
+		{
+		    cerr<<"Error extracting public key"<<endl;
 		    EC_KEY_free(public_key);
 		    return;
 		}
 
+		vector<unsigned char> final_signature=hex_to_bytes(hexSignature);
 		vector<unsigned char> hash=compute_sha512(file_name);
 
-		
-		// vector<unsigned char> final_signature=stringToVector(signature);
-
-        if (verify_signature(public_key, hash, final_signature))
+        if(verify_signature(public_key,hash,final_signature))
 		{
-		    cout << "Signature is valid!" << endl;
-		} 
+		    cout<<"Signature is valid, Inserting document details into database"<<endl;
+			//add metadata to mongodb
+			insertDocument(hexSignature,unique_id,organization);
+		}
 		else 
 		{
-		    cout << "Signature verification failed." << endl;
+		    cout<<"Signature verification failed, document dropped"<<endl;
 		}
-		
 		EC_KEY_free(public_key);
 	}
 
 	static EC_KEY* load_public_key(const char* filename)
 	{
-		FILE* file = fopen(filename, "r");
-		if (!file) {
-			cerr << "Error opening file: " << filename << endl;
+		FILE* file=fopen(filename, "r");
+		if(!file)
+		{
+			cerr<<"Error opening file: "<<filename<<endl;
 			return nullptr;
 		}
 	
-		EC_KEY* ec_key = PEM_read_EC_PUBKEY(file, nullptr, nullptr, nullptr);
+		EC_KEY* ec_key=PEM_read_EC_PUBKEY(file,nullptr,nullptr,nullptr);
 		fclose(file);
 	
-		if (!ec_key) {
-			cerr << "Error reading public key from PEM file.\n";
+		if(!ec_key)
+		{
+			cerr<<"Error reading public key from PEM file.\n";
 		}
 	
 		return ec_key;
 	}
 
-	static void save_public_key(const string& public_key_pem)
+	static void save_public_key(const string& public_key_pem,string organizationName,int clientSocketFileDescriptor=-1)
 	{
-		ofstream file("NIT_Warangal.pem");
-		if(file.is_open())
+		if(organizationName.length()==0)
 		{
-			file << public_key_pem;
-			file.close();
-			cout << "Public key saved to NIT_Warangal.pem\n";
-		}
-		else
-		{
-			cerr << "Failed to save public key\n";
+			string publicKeyFileName=to_string(clientSocketFileDescriptor);
+			publicKeyFileName+=".pem";
+			ofstream file(publicKeyFileName);
+			if(file.is_open())
+			{
+				file<<public_key_pem;
+				file.close();
+				cout<<"Public key saved to "<<publicKeyFileName;
+			}
+			else
+			{
+				cerr<<"Failed to save public key\n";
+			}
 		}
 	}
 
@@ -381,14 +394,15 @@ class docReceiver
 		int receivedBytes;
 		if((receivedBytes=recv(clientSocketFileDescriptor,buffer,sizeof(buffer),0))!=0)
 		{
-			cout << "Received public key of NITW:\n" << buffer <<endl;
-    		save_public_key(buffer);
+			cout << "Received public key:\n" << buffer <<endl;
+    		save_public_key(buffer,"",clientSocketFileDescriptor);
 		}
 		
 
 		send(clientSocketFileDescriptor,"ACK",3,0);
 
 		bool docsEnded=false;
+		bool firstFile=true;
 		while(1)
 		{
 			if(docsEnded)
@@ -473,16 +487,24 @@ class docReceiver
 
 			send(clientSocketFileDescriptor, "ACK", 3, 0);
 			
-			process_file(file_name,receivedSignatureHex);
-
-			if(deleteFile(file_name.c_str()))
+			if(firstFile)
 			{
-				cout<<"Document deleted, no more stored.\n";
+				process_file(file_name,receivedSignatureHex,clientSocketFileDescriptor);
+				firstFile=false;
 			}
 			else
 			{
-				cout<<"Error in deleting document.\n";
+				process_file(file_name,receivedSignatureHex);
 			}
+
+			// if(deleteFile(file_name.c_str()))
+			// {
+			// 	cout<<"Document deleted, no more stored.\n";
+			// }
+			// else
+			// {
+			// 	cout<<"Error in deleting document.\n";
+			// }
 			sem_wait(&semaphore);
 			doc_id-=1;
 			sem_post(&semaphore);
